@@ -4,6 +4,7 @@ import { iga } from "@/lib/josa";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { BackIcon } from "../components/Icons";
+import { ManualSurvey } from "../components/SurveyCard";
 import { useRouter } from "next/navigation";
 import { useChar, withC } from "../components/useChar";
 
@@ -75,10 +76,12 @@ export default function MemoryPage() {
         {summary ? <div className="summary-box">{summary}</div> : <div className="empty">대화를 조금 더 하면 {iga(c.shortName)} 정리해 둬요.</div>}
         <p className="side-note">지운 기억은 다음 대화부터 {c.shortName}에게 넘기지 않아요. 요약은 몇 번 대화할 때마다 새로 쓰고, 그때 지운 내용을 빼고 써요.</p>
 
+        {facts !== null && <ManualSurvey c={c} />}
+
         <div className="section-title">내 기록</div>
         {wipe ? (
           <div className="fact confirm">
-            <p>대화, 기억, 호감도가 모두 지워지고 처음부터 시작해요. 되돌릴 수 없어요.</p>
+            <p>대화, 기억, 호감도, 설문 답변이 모두 지워지고 처음부터 시작해요. 되돌릴 수 없어요.</p>
             <button className="btn del" onClick={() => setWipe(false)}>취소</button>
             <button className="btn del" style={{ color: "var(--warn)" }} onClick={wipeAll}>모두 지우기</button>
           </div>

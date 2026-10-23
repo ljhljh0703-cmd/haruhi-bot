@@ -4,6 +4,7 @@ import { CHARACTERS } from "@/lib/characters";
 import { listFacts, listMessages, q, setCorrection, usingLocalDb } from "@/lib/db";
 import { chatModelName, judgeProviderName, mockMode } from "@/lib/llm";
 import { shadowProvider } from "@/lib/judges";
+import { buildFeedbackExport, readSurveyFeedback } from "@/lib/surveys";
 
 export const dynamic = "force-dynamic";
 const ADMIN_COOKIE = "sos_admin";
@@ -28,6 +29,10 @@ export async function GET(req: Request) {
   if (!(await authed())) return Response.json({ error: "auth" }, { status: 401 });
   const sp = new URL(req.url).searchParams;
   const userId = sp.get("user");
+  if (sp.get("export") === "feedback") {
+    const data = await buildFeedbackExport(q, sp.get("rules") || RULES_VERSION, sp.get("char") || "all");
+    return new Response(JSON.stringify(data, null, 2) + "\n", { headers: { "Content-Type": "application/json; charset=utf-8", "Content-Disposition": `attachment; filename=haruhi-feedback-${new Date().toISOString().slice(0, 10)}.json`, "Cache-Control": "no-store" } });
+  }
 
   // 학습용 라벨 내보내기(JSONL). 사람이 고친 라벨(source=human)과 판정기 라벨(source=judge)을 구분한다.
   // 판정 전용 모델의 답을 그대로 학습시키면 제공사 약관(TypeSafe MCA 2.3 등)에 걸릴 수 있어, 학습에는 human만 쓴다.
@@ -58,11 +63,13 @@ export async function GET(req: Request) {
   // 거르기: 규칙 판(rules)과 캐릭터(char). 기본은 지금 판, 전체 캐릭터.
   const rulesF = sp.get("rules") || RULES_VERSION;
   const charF = sp.get("char") || "all";
+  const feedbackData = await readSurveyFeedback(q, rulesF, charF);
+  const { surveys: _surveys, presentations: _presentations, ...feedback } = feedbackData;
   const allUsers = await q(`select id, nickname, character, stage, score, total_turns, visits, created_at, last_seen, day_turns from users order by last_seen desc`);
   const users = allUsers.filter((u) => charF === "all" || u.character === charF);
   const uid = new Set(users.map((u) => u.id));
   const allTurns = await q(`select user_id, action, applied_delta, capped, correction, flags, chat_in, chat_out, judge_in, judge_out, extra_in, extra_out, judge_provider, judge_conf, shadow_action, chat_model, first_token_ms, latency_ms, rules_version, rep_score, created_at from turns`);
-  const versions = [...new Set(allTurns.map((t) => t.rules_version ?? "old"))];
+  const versions = [...new Set([...allTurns.map((t) => t.rules_version ?? "old"), ...feedback.versions])];
   const turns = allTurns.filter((t) => uid.has(t.user_id) && (rulesF === "all" || (t.rules_version ?? "old") === rulesF));
   const talk = turns.filter((t) => t.action !== "greet");
   const byAction: Record<string, number> = {};
@@ -130,6 +137,7 @@ export async function GET(req: Request) {
       reportBy,
     },
     users,
+    feedback,
     drops,
     reports: reports.slice(0, 20).map((r) => ({ reason: r.reason, content: r.content, user: users.find((u) => u.id === r.user_id)?.nickname ?? "?" })),
     actions: ACTION_KEYS,

@@ -187,11 +187,15 @@ a { color: inherit; }
 .idcard .face { width: 64px; height: 64px; border-radius: 14px; }
 .stamp {
   position: absolute; right: 14px; top: 44px; font-family: var(--serif); font-weight: 700; font-size: 15px;
-  color: var(--accent); border: 2px solid var(--accent); border-radius: 8px; padding: 2px 8px; transform: rotate(-8deg);
-  background: color-mix(in srgb, var(--card) 70%, transparent);
+  color: var(--accent); border: 2px solid transparent; border-radius: 8px; padding: 2px 8px;
+  white-space: nowrap; overflow-wrap: normal; isolation: isolate;
+}
+.stamp::before {
+  content: ""; position: absolute; inset: -2px; z-index: -1; border: 2px solid var(--accent); border-radius: inherit;
+  background: color-mix(in srgb, var(--card) 70%, transparent); transform: rotate(-8deg);
 }
 .stamp.thump { animation: thump 0.7s cubic-bezier(.2, 1.6, .4, 1) both; }
-@keyframes thump { 0% { transform: rotate(-8deg) scale(2.4); opacity: 0; } 60% { opacity: 1; } 100% { transform: rotate(-8deg) scale(1); } }
+@keyframes thump { 0% { transform: scale(2.4); opacity: 0; } 60% { opacity: 1; } 100% { transform: scale(1); } }
 .big-meter { height: 8px; border-radius: 8px; background: var(--line-2); overflow: hidden; margin: 6px 0 4px; }
 .big-meter > i { display: block; height: 100%; background: var(--accent); border-radius: 8px; transition: width 0.8s ease; }
 .kv { display: flex; justify-content: space-between; font-size: 13px; color: var(--ink-2); margin: 4px 0; }
@@ -336,3 +340,39 @@ a { color: inherit; }
 .log-sheet { height: 86dvh; display: flex; flex-direction: column; padding-bottom: 0; }
 .log-sheet .log { flex: 1; padding: 6px 4px 16px; }
 .log-head { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 8px; border-bottom: 0.5px solid var(--line); }
+
+/* ---------- 테스트 소감: 무대 아래 문서 흐름 ---------- */
+.vn-main { width: 100%; max-width: 480px; min-width: 0; }
+.chat-survey { padding: 16px 12px calc(24px + env(safe-area-inset-bottom)); scroll-margin-top: 12px; }
+.survey-jump { display: block; width: fit-content; max-width: 100%; margin: 8px auto 0; padding: 5px 10px; border-radius: 10px; background: var(--card); color: var(--accent); font-size: 12px; text-align: center; }
+.manual-survey { margin: 24px 0; }
+.survey-card { min-width: 0; padding: 18px; border: 0.5px solid var(--line); border-radius: 18px; background: var(--card); word-break: keep-all; overflow-wrap: anywhere; }
+.survey-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.survey-head > div { min-width: 0; }
+.survey-head h2 { margin: 0; font-family: var(--serif); font-size: 18px; line-height: 1.4; }
+.survey-head p { margin: 5px 0 0; font-size: 13px; color: var(--muted); }
+.survey-head button { flex: none; }
+.survey-card fieldset { min-width: 0; margin: 0 0 18px; padding: 0; border: 0; }
+.survey-card legend, .survey-field > label { display: block; padding: 0; margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+.survey-field > label > span { font-weight: 400; color: var(--muted); }
+.survey-scale, .survey-options { display: grid; gap: 6px; }
+.survey-five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.survey-eleven { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.survey-options { grid-template-columns: 1fr 1.5fr 1fr; }
+.survey-scale label, .survey-options label { display: block; min-width: 0; position: relative; cursor: pointer; }
+.survey-scale input, .survey-options input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.survey-scale span, .survey-options span { display: flex; min-height: 44px; align-items: center; justify-content: center; padding: 7px 4px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink-2); background: var(--paper); font-size: 14px; text-align: center; }
+.survey-scale input:checked + span, .survey-options input:checked + span { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.survey-scale input:focus-visible + span, .survey-options input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.survey-card fieldset:disabled { opacity: 0.65; }
+.survey-ends { display: flex; justify-content: space-between; gap: 12px; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.survey-ends > span:last-child { text-align: right; }
+.survey-field { margin-bottom: 18px; }
+.survey-field textarea { display: block; width: 100%; min-width: 0; resize: vertical; min-height: 86px; padding: 10px 12px; border: 0.5px solid var(--line); border-radius: 12px; background: var(--paper); font-size: 16px; line-height: 1.6; }
+.survey-count { margin-top: 4px; text-align: right; font-size: 11px; color: var(--muted); }
+.survey-note { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
+.survey-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.survey-error { margin: 10px 0; color: var(--warn); font-size: 13px; }
+.survey-error button { border: 0; background: none; padding: 0; color: inherit; text-decoration: underline; }
+.survey-thanks { padding: 12px 0; margin: 0; font-size: 14px; color: var(--ink-2); }
+@media (max-width: 420px) { .survey-card { padding: 16px 14px; } }

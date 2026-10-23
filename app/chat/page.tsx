@@ -10,6 +10,7 @@ import Face from "../components/Face";
 import IdCard, { UserState, progress } from "../components/IdCard";
 import { NoteIcon, SendIcon } from "../components/Icons";
 import RichText from "../components/RichText";
+import { AutomaticSurvey } from "../components/SurveyCard";
 import { REPORT_REASONS } from "@/lib/reports";
 import { sceneFor, spriteFor } from "@/lib/characters/public";
 import type { CharacterPublic } from "@/lib/characters/types";
@@ -56,6 +57,7 @@ export default function ChatPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [pop, setPop] = useState<{ v: number; k: number } | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
+  const [hasSurvey, setHasSurvey] = useState(false);
   const [reported, setReported] = useState<Record<number, string>>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -200,6 +202,7 @@ export default function ChatPage() {
 
   return (
     <div className="vn-app">
+      <div className="vn-main">
       <main className="vn-stage" style={{ background: bg }}>
         {user.mock && <div className="banner vn-banner">연습 모드 · AI를 연결하기 전이라 정해진 답만 나와요</div>}
         <header className="vn-top">
@@ -262,9 +265,9 @@ export default function ChatPage() {
           ) : (
             <div className="compose-row">
               <button className="act-toggle" aria-pressed={actionMode} onClick={() => { setActionMode((v) => !v); inputRef.current?.focus(); }}>행동</button>
-              <label className="visually-hidden" htmlFor="msg">메시지</label>
               <textarea
                 id="msg"
+                aria-label="메시지"
                 ref={inputRef}
                 className={`input ${actionMode ? "action-mode" : ""}`}
                 rows={1}
@@ -277,9 +280,12 @@ export default function ChatPage() {
               <button className="send" onClick={submit} disabled={!text.trim() || busy} aria-label="보내기"><SendIcon /></button>
             </div>
           )}
+          {hasSurvey && <a className="survey-jump" href="#chat-survey">짧은 테스트 소감 남기기 ↓</a>}
           <div className="disclose">AI로 만든 캐릭터예요 · 실제 인물이 아니고 대화는 허구예요</div>
         </div>
       </main>
+      <AutomaticSurvey c={c} checkKey={String(user.dayTurnsLeft) + ":" + String(user.doneToday)} paused={busy || waiting || sheet !== null || levelUp !== null} onOpenChange={setHasSurvey} />
+      </div>
 
       <aside className="side-col"><IdCard c={c} u={user} /></aside>
 

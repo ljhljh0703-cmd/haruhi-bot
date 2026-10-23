@@ -5,6 +5,16 @@ import { ACTIONS } from "@/lib/config";
 import RichText from "../components/RichText";
 
 type Overview = any;
+type FeedbackSummary = { shown: number; responses: number; skipped: number; responseRate: number | null; characterAvg: number | null; returnYesRate: number | null; recommendAvg: number | null; recommendResponses: number };
+type FeedbackData = {
+  summary: FeedbackSummary;
+  byVersionCharacter: (FeedbackSummary & { rulesVersion: string; character: string })[];
+  byTrigger: (FeedbackSummary & { trigger: "turn10" | "day_end" | "manual" })[];
+  recent: { nickname: string; character: string; rulesVersion: string; trigger: string; q1: number; q2: "yes" | "unsure" | "no"; q3: string; q4: number | null; createdAt: string }[];
+};
+const feedbackValue = (value: number | null | undefined, suffix = "") => value == null || !Number.isFinite(value) ? "-" : value.toFixed(1) + suffix;
+const feedbackTrigger: Record<string, string> = { turn10: "10턴째", day_end: "하루 끝", manual: "기억 노트" };
+const feedbackReturn = { yes: "예", unsure: "모르겠어요", no: "아니요" };
 type Detail = { messages: any[]; turns: any[]; facts: any[]; reports: { message_id: number; reason: string }[] };
 const label = (a: string) => (ACTIONS as any)[a]?.label ?? (a === "greet" ? "먼저 말 걸기" : a);
 const time = (iso: string) => new Date(iso).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" });
@@ -52,6 +62,8 @@ export default function Admin() {
   }
   if (!data) return <main className="admin"><p className="empty">불러오는 중</p></main>;
   const s = data.stats;
+  const feedback = data.feedback as FeedbackData | undefined;
+  const feedbackExport = "/api/admin?" + new URLSearchParams({ export: "feedback", rules: data.filter.rules, char: charF });
   const reach = s.stageDist.map((_: number, i: number) => s.stageDist.slice(i).reduce((a: number, b: number) => a + b, 0));
   const chars: { id: string; name: string; stages: string[] }[] = data.filter.characters;
   const stageNames = (charF !== "all" ? chars.find((c) => c.id === charF) : chars[0])?.stages ?? [];
@@ -86,7 +98,7 @@ export default function Admin() {
             </select></label>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}><a className="icon-btn" href="/api/admin?export=labels" style={{ textDecoration: "none" }}>라벨 내보내기</a><button className="icon-btn" onClick={load}>새로고침</button></div>
+        <div className="admin-tools"><a className="icon-btn" href={feedbackExport} style={{ textDecoration: "none" }}>피드백 내보내기</a><a className="icon-btn" href="/api/admin?export=labels" style={{ textDecoration: "none" }}>라벨 내보내기</a><button className="icon-btn" onClick={load}>새로고침</button></div>
       </header>
       {data.env.localDb && <p className="warn" style={{ marginTop: -8 }}>DATABASE_URL이 없어 임시 저장소를 쓰는 중. 배포에서는 기록이 사라질 수 있어요.</p>}
 
@@ -100,6 +112,42 @@ export default function Admin() {
         <Tile k="두 판정기 일치" v={s.shadowAgree === null ? "-" : `${s.shadowAgree}%`} sub={`비교 ${s.shadowN}턴 · 확신 낮아 보류 ${s.lowConf}`} />
         <Tile k="반복 답" v={s.repAvg === null ? "-" : s.repAvg} sub={`겹침 0.5 이상 ${s.repHigh}턴`} />
         <Tile k="「이상해요」 신고" v={s.reports} sub={Object.entries(s.reportBy).map(([k, v]) => `${k} ${v}`).join(" · ") || "없음"} />
+      </section>
+
+      <section className="panel feedback-panel" aria-labelledby="feedback-title">
+        <h2 id="feedback-title">친구 피드백</h2>
+        <p className="muted">위에서 고른 규칙 판·캐릭터의 답변이에요. 응답률은 실제 화면에 보인 설문 대비 제출한 비율입니다.</p>
+        {!feedback && <p className="muted">친구 피드백을 불러오지 못했어요. 새로고침해 주세요.</p>}
+        {feedback && <>
+          <div className="tiles">
+            <Tile k="캐릭터답다" v={feedbackValue(feedback.summary.characterAvg, " / 5")} sub={"응답 " + feedback.summary.responses + "개"} />
+            <Tile k="내일 또 올래요 · 예" v={feedbackValue(feedback.summary.returnYesRate, "%")} sub="제출된 답변 기준" />
+            <Tile k="친구 추천 점수" v={feedbackValue(feedback.summary.recommendAvg, " / 10")} sub={"기억 노트 응답 " + feedback.summary.recommendResponses + "개"} />
+            <Tile k="설문 응답률" v={feedbackValue(feedback.summary.responseRate, "%")} sub={"노출 " + feedback.summary.shown + " · 제출 " + feedback.summary.responses + " · 건너뜀 " + feedback.summary.skipped} />
+          </div>
+          {feedback.byVersionCharacter.length > 0 && <>
+            <h3>규칙 판·캐릭터별</h3>
+            <div className="feedback-groups">{feedback.byVersionCharacter.map((group) => <article className="feedback-group" key={group.rulesVersion + ":" + group.character}>
+              <h4>{group.rulesVersion} · {charName(group.character)}</h4>
+              <dl>
+                <div><dt>캐릭터답다</dt><dd>{feedbackValue(group.characterAvg, " / 5")}</dd></div>
+                <div><dt>내일 또 올래요 · 예</dt><dd>{feedbackValue(group.returnYesRate, "%")}</dd></div>
+                <div><dt>친구 추천</dt><dd>{feedbackValue(group.recommendAvg, " / 10")}</dd></div>
+                <div><dt>응답률</dt><dd>{feedbackValue(group.responseRate, "%")}</dd></div>
+              </dl>
+              <p className="muted">노출 {group.shown} · 제출 {group.responses} · 추천 응답 {group.recommendResponses}</p>
+            </article>)}</div>
+          </>}
+          {feedback.byTrigger.length > 0 && <p className="muted feedback-trigger">{feedback.byTrigger.map((group) => <span key={group.trigger}>{feedbackTrigger[group.trigger]}: 노출 {group.shown} · 제출 {group.responses}</span>)}</p>}
+          <h3>좋았거나 이상했던 순간 · 최근 20개</h3>
+          {feedback.recent.length === 0 && <p className="muted">아직 남긴 글이 없어요.</p>}
+          {feedback.recent.map((entry, i) => <div className="drop" key={entry.createdAt + ":" + i}>
+            <b>{entry.nickname}</b> · {charName(entry.character)} · {entry.rulesVersion} · {feedbackTrigger[entry.trigger] ?? entry.trigger} · {time(entry.createdAt)}
+            <p className="feedback-text">{entry.q3}</p>
+            <small className="muted">캐릭터답다 {entry.q1}/5 · 내일 또 올래요 {feedbackReturn[entry.q2]}{entry.q4 !== null ? " · 친구 추천 " + entry.q4 + "/10" : ""}</small>
+          </div>)}
+          <p className="muted feedback-export-note">피드백 내보내기는 현재 선택한 판·캐릭터의 설문, 신고, 오분류 표시, 반복 답과 끊긴 지점을 JSON 파일 하나로 내려받아요. 식별 정보는 별명만 포함해요.</p>
+        </>}
       </section>
 
       <section className="grid2">
@@ -123,6 +171,7 @@ export default function Admin() {
       <section className="grid2">
         <div className="panel">
           <h2>참여자</h2>
+          <div className="table-scroll" role="region" aria-label="참여자 표" tabIndex={0}>
           <table>
             <thead><tr><th>이름</th><th>캐릭터</th><th>단계</th><th>호감</th><th>턴</th><th>방문</th><th>마지막</th></tr></thead>
             <tbody>
@@ -133,6 +182,7 @@ export default function Admin() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
         <div className="panel">
           <h2>대화가 끊긴 지점</h2>
@@ -226,6 +276,21 @@ const ADMIN_CSS = `
 .admin-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
 .admin-head h1 { font-family: var(--serif); font-size: 22px; margin: 0; }
 .admin-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.admin-tools { display: flex; flex-wrap: wrap; gap: 8px; flex: none; max-width: 100%; }
+.feedback-panel { word-break: keep-all; overflow-wrap: anywhere; }
+.feedback-panel h3 { margin: 20px 0 8px; font-size: 13px; }
+.feedback-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; }
+.feedback-group { min-width: 0; padding: 12px; border: 0.5px solid var(--line); border-radius: 12px; }
+.feedback-group h4 { margin: 0 0 8px; font-size: 13px; }
+.feedback-group dl { margin: 0; font-size: 12.5px; }
+.feedback-group dl > div { display: flex; justify-content: space-between; gap: 12px; margin: 5px 0; }
+.feedback-group dt { color: var(--muted); }
+.feedback-group dd { margin: 0; flex: none; font-variant-numeric: tabular-nums; }
+.feedback-group p { margin: 8px 0 0; }
+.feedback-trigger { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.feedback-text { white-space: pre-wrap; max-width: 60ch; margin: 4px 0; }
+.feedback-export-note { margin: 16px 0 0; max-width: 60ch; }
+@media (max-width: 760px) { .admin-head { flex-direction: column; } .admin-tools .icon-btn { font-size: 12px; } }
 .filters { display: flex; gap: 12px; margin-top: 8px; font-size: 13px; color: var(--ink-2); }
 .filters select { height: 30px; border-radius: 8px; border: 0.5px solid var(--line); background: var(--card); margin-left: 4px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
@@ -245,6 +310,9 @@ const ADMIN_CSS = `
 .bar i { display: block; height: 100%; background: var(--accent); border-radius: 8px; }
 .bar b { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
+.table-scroll table { min-width: max-content; }
+.table-scroll th, .table-scroll td { white-space: nowrap; word-break: keep-all; overflow-wrap: normal; }
 th { text-align: left; font-weight: 500; color: var(--muted); border-bottom: 0.5px solid var(--line); padding: 6px 8px; }
 td { border-bottom: 0.5px solid var(--line-2); padding: 7px 8px; font-variant-numeric: tabular-nums; }
 tbody tr { cursor: pointer; }

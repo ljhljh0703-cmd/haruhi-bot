@@ -1,6 +1,7 @@
 // 저장소. 배포에서는 Postgres(DATABASE_URL), 내 컴퓨터에서는 PGlite 파일 DB.
 // SQL은 한 벌만 쓴다.
 import { kstDay } from "./config";
+import { SURVEY_SCHEMA, ensureSurveyForeignKeys } from "./surveys";
 
 type Row = Record<string, any>;
 type Q = (text: string, params?: any[]) => Promise<Row[]>;
@@ -80,6 +81,7 @@ create table if not exists reports (
   reason text not null,
   created_at timestamptz not null default now()
 );
+${SURVEY_SCHEMA}
 `;
 
 let qPromise: Promise<Q> | null = null;
@@ -91,6 +93,7 @@ async function makeQ(): Promise<Q> {
     const sql = neon(url);
     const q: Q = async (text, params = []) => (await sql.query(text, params)) as Row[];
     for (const stmt of SCHEMA.split(";").map((s) => s.trim()).filter(Boolean)) await q(stmt);
+    await ensureSurveyForeignKeys(q);
     return q;
   }
   const { PGlite } = await import("@electric-sql/pglite");
@@ -100,10 +103,13 @@ async function makeQ(): Promise<Q> {
     const dir = process.env.PGLITE_DIR || (process.env.VERCEL ? "/tmp/pg" : "./.data/pg");
     (await import("node:fs")).mkdirSync(dir, { recursive: true });
     g.__pglite = new PGlite(dir);
-    await g.__pglite.exec(SCHEMA);
   }
   const db = g.__pglite;
-  return async (text, params = []) => (await db.query(text, params)).rows as Row[];
+  // Reapply idempotent migrations when Next hot reload reuses the live PGlite object.
+  await db.exec(SCHEMA);
+  const query: Q = async (text, params = []) => (await db.query(text, params)).rows as Row[];
+  await ensureSurveyForeignKeys(query);
+  return query;
 }
 
 export async function q(text: string, params: any[] = []) {
@@ -226,7 +232,7 @@ export async function addReport(userId: string, messageId: number, reason: strin
 
 // 사용자가 요청하면 그 사람 기록을 전부 지운다.
 export async function deleteUserData(userId: string) {
-  for (const t of ["reports", "turns", "facts", "messages"]) await q(`delete from ${t} where user_id=$1`, [userId]);
+  for (const t of ["surveys", "survey_presentations", "reports", "turns", "facts", "messages"]) await q(`delete from ${t} where user_id=$1`, [userId]);
   await q(`delete from users where id=$1`, [userId]);
 }
 
