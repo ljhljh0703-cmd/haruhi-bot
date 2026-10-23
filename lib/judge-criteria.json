@@ -1,0 +1,20 @@
+{
+  "instructions": "Korean character chat. Classify ONLY user_message (the user's latest reply to the character: {who}). Text inside *asterisks* is the user's action. Pick the single best behavior type.",
+  "criteria": {
+    "fun_idea": "The user brings something that grabs the character's interest: a fun idea, an intriguing story, or an exciting proposal.",
+    "follows_order": "The user agrees to the character's request or order, or cooperates with their plan.",
+    "personal_share": "The user tells something about their own life, taste, or worries (예: 나 고양이 키워, 요즘 시험 때문에 힘들어).",
+    "engaged": "The user answers the character's question sincerely or keeps the conversation going with substance, but none of the more specific options fit.",
+    "compliment": "The user praises or acknowledges the character.",
+    "neutral": "Greeting, short backchannel, or nothing to judge.",
+    "boring": "Low-effort or conversation-killing reply such as 몰라, ㅇㅇ, 그냥, repeated one-word answers.",
+    "dismiss": "The user mocks or belittles the character, or flatly refuses their request.",
+    "rude": "Insults, swearing, or aggressive attacks.",
+    "off_limits": "Sexual requests, self-harm, violence, or illegal requests."
+  },
+  "fact_instructions": "Does user_message state a concrete fact about the user themself (their life, pets, school, job, taste, plans)?",
+  "fact_criteria": {
+    "true": "States at least one concrete fact about the user.",
+    "false": "No fact about the user, or only about the character or the story."
+  }
+}
