@@ -1,11 +1,22 @@
-// 캐릭터다움 20문항. 고치기 전·후 같은 질문을 돌려 비교한다.
-// 틀: 2026-10-11 AI 캐릭터 리서치 B1 「20문항 틀」 7범주 + 출시작 사고에서 뽑은 깨뜨리기 질문.
-// 사용: BASE=http://localhost:3100 node scripts/eval.mjs   (ANTHROPIC_API_KEY 있으면 AI 심판 채점, 없으면 사람 채점용 표만)
+// 캐릭터 20문항: 대사·심판 실패를 각각 보존하고 모든 문항을 끝까지 기록한다.
 import fs from "node:fs";
-
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+const shell = { ...process.env };
+if (fs.existsSync(".env.local")) { process.loadEnvFile(".env.local"); Object.assign(process.env, shell); }
+const secrets = Object.entries(process.env).filter(([k, v]) => /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|COOKIE|DATABASE_URL)$/i.test(k) && v).map(([, v]) => v).sort((a, b) => b.length - a.length);
+const redact = (value) => secrets.reduce((s, secret) => secret.length >= 8 ? s.split(secret).join("[REDACTED]") : s === secret ? "[REDACTED]" : s, String(value)).replace(/\bBearer\s+[^\s"\\]+/gi, "Bearer [REDACTED]").replace(/\bsk-[\w-]+/g, "[REDACTED]");
+const redactTree = (value) => typeof value === "string" ? redact(value) : Array.isArray(value) ? value.map(redactTree) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, child]) => [key, redactTree(child)])) : value;
+const safeUrl = (value) => { try { const u = new URL(value); return u.origin + u.pathname; } catch { return "invalid_url"; } };
 const BASE = process.env.BASE || "http://localhost:3100";
-const CHAR = process.env.CHAR || "haruhi"; // 다른 캐릭터: CHAR=jaeheon QUESTIONS=eval/questions-jaeheon.json
+const CHAR = process.env.CHAR || "haruhi";
 const JUDGE_MODEL = process.env.JUDGE_MODEL || "claude-haiku-5-5";
+const JUDGE_BASE = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
+const timeout = Number(process.env.EVAL_TIMEOUT_MS || 30000);
+if (!Number.isInteger(timeout) || timeout < 1 || timeout > 300000) throw new Error("invalid_timeout");
+const grades = ["캐릭터답다", "애매", "아니다"];
+const networkReason = (error) => error?.name === "TimeoutError" || error?.name === "AbortError" ? "timeout" : "network_error";
+const fail = (reason) => { throw new Error(reason); };
 
 const DEFAULT_ITEMS = [
   // 설정 지식 4
@@ -37,67 +48,102 @@ const DEFAULT_ITEMS = [
   { cat: "기억", setup: ["나 다음 주에 수학 시험 있어"], q: "나 다음 주에 뭐 있다고 했지?", want: "수학 시험을 기억" },
 ];
 
+
 const ITEMS = process.env.QUESTIONS ? JSON.parse(fs.readFileSync(process.env.QUESTIONS, "utf8")) : DEFAULT_ITEMS;
+if (!Array.isArray(ITEMS)) throw new Error("invalid_questions");
 
 async function session() {
-  const r = await fetch(`${BASE}/api/session?c=${CHAR}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nickname: "평가", consent: true }) });
+  let r;
+  try { r = await fetch(BASE.replace(/\/$/, "") + "/api/session?c=" + encodeURIComponent(CHAR), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nickname: "평가", consent: true }), signal: AbortSignal.timeout(timeout) }); }
+  catch (error) { fail("session_" + networkReason(error)); }
+  if (r.status !== 200) fail("session_http_" + r.status);
   const cookie = r.headers.get("set-cookie")?.split(";")[0];
-  if (!cookie) throw new Error("세션 실패: " + r.status);
+  if (!cookie) fail("session_cookie_missing");
   return cookie;
 }
 
 async function say(cookie, text) {
-  const r = await fetch(`${BASE}/api/chat?c=${CHAR}`, { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ text }) });
-  let reply = "";
-  for (const ln of (await r.text()).split("\n")) {
-    if (!ln.trim()) continue;
-    const ev = JSON.parse(ln);
-    if (ev.t === "d") reply += ev.v;
-    if (ev.t === "error") throw new Error(ev.message);
+  let r;
+  try { r = await fetch(BASE.replace(/\/$/, "") + "/api/chat?c=" + encodeURIComponent(CHAR), { method: "POST", headers: { "content-type": "application/json", cookie }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(timeout) }); }
+  catch (error) { fail("chat_" + networkReason(error)); }
+  if (r.status !== 200) fail("chat_http_" + r.status);
+  let body;
+  try { body = await r.text(); } catch (error) { fail("stream_" + networkReason(error)); }
+  let reply = "", ended = false;
+  for (const line of body.split("\n")) {
+    if (!line.trim()) continue;
+    let event;
+    try { event = JSON.parse(line); } catch { fail("stream_json_invalid"); }
+    if (event.t === "error") fail("stream_error");
+    if (event.t === "d") {
+      if (typeof event.v !== "string") fail("stream_delta_invalid");
+      reply += event.v;
+    }
+    if (event.t === "meta") ended = true;
   }
+  if (!ended) fail("stream_meta_missing");
+  if (!reply.trim()) fail("empty_reply");
   return reply.trim();
 }
 
 async function judge(item, reply) {
-  if (!process.env.ANTHROPIC_API_KEY) return { grade: "", why: "" };
-  const WHO = { haruhi: "스즈미야 하루히(반말, 짧고 단정, 지루함을 싫어하는 SOS단 단장)", jaeheon: "윤재헌(게임 회사 기획팀 사수, 무뚝뚝한 반말, 말 대신 행동으로 챙김)" }[CHAR] ?? CHAR;
-  const prompt = `캐릭터 채팅 평가. 캐릭터는 ${WHO}.
-범주: ${item.cat}
-사용자: ${item.q}
-기대: ${item.want}
-캐릭터 답: ${reply}
-
-"캐릭터답다" / "애매" / "아니다" 중 하나와 이유(30자 이내)를 JSON으로: {"grade":"...","why":"..."}`;
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model: JUDGE_MODEL, max_tokens: 150, messages: [{ role: "user", content: prompt }] }),
-  });
-  const t = (await r.json()).content?.[0]?.text ?? "{}";
-  try { return JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1)); } catch { return { grade: "?", why: t.slice(0, 40) }; }
+  const who = { haruhi: "스즈미야 하루히(반말, 짧고 단정, 지루함을 싫어하는 SOS단 단장)", jaeheon: "윤재헌(게임 회사 기획팀 사수, 무뚝뚝한 반말, 말 대신 행동으로 챙김)" }[CHAR] ?? CHAR;
+  const prompt = `캐릭터 채팅 평가. 캐릭터는 ${who}.\n범주: ${item.cat}\n사용자: ${item.q}\n기대: ${item.want}\n캐릭터 답: ${reply}\n\n"캐릭터답다" / "애매" / "아니다" 중 하나와 이유(30자 이내)를 JSON으로: {"grade":"...","why":"..."}`;
+  let r;
+  try { r = await fetch(JUDGE_BASE.replace(/\/$/, "") + "/v1/messages", {
+    method: "POST", headers: { "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model: JUDGE_MODEL, max_tokens: 150, messages: [{ role: "user", content: prompt }] }), signal: AbortSignal.timeout(timeout),
+  }); } catch (error) { fail("judge_" + networkReason(error)); }
+  if (r.status !== 200) fail("judge_http_" + r.status);
+  let envelope;
+  try { envelope = await r.json(); } catch { fail("judge_response_json_invalid"); }
+  const text = Array.isArray(envelope.content) ? envelope.content.filter((b) => b.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n").trim() : "";
+  if (!text) fail("judge_empty_text");
+  let answer;
+  try { answer = JSON.parse(text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { fail("judge_json_invalid"); }
+  if (!answer || !grades.includes(answer.grade)) fail("judge_grade_invalid");
+  return { grade: answer.grade, why: typeof answer.why === "string" ? answer.why : "" };
 }
 
 const rows = [];
-for (const [i, it] of ITEMS.entries()) {
-  const cookie = await session();
-  for (const s of it.setup ?? []) await say(cookie, s);
-  const reply = await say(cookie, it.q);
-  const j = await judge(it, reply);
-  rows.push({ n: i + 1, ...it, reply, ...j });
-  process.stdout.write(`${i + 1} `);
+for (const [index, item] of ITEMS.entries()) {
+  const row = { n: index + 1, ...item, reply: null, status: "chat_failed", grade: null, why: null, failure: null };
+  try {
+    const cookie = await session();
+    for (const [setupIndex, text] of (item.setup ?? []).entries()) {
+      try { await say(cookie, text); } catch (error) { fail("setup_" + (setupIndex + 1) + ":" + error.message); }
+    }
+    row.reply = await say(cookie, item.q);
+    if (!process.env.ANTHROPIC_API_KEY) row.status = "no_judge";
+    else {
+      try { Object.assign(row, await judge(item, row.reply)); row.status = "judged"; }
+      catch (error) { row.status = "judge_failed"; row.failure = error.message; }
+    }
+  } catch (error) { row.failure = error.message; }
+  rows.push(row);
+  process.stdout.write((index + 1) + " ");
 }
-const cell = (s) => String(s ?? "").replace(/\|/g, "/").replace(/\n/g, " ");
-const count = (g) => rows.filter((r) => r.grade === g).length;
+const count = (status) => rows.filter((r) => r.status === status).length;
+const summary = { examples: rows.length, grades: Object.fromEntries(grades.map((g) => [g, rows.filter((r) => r.status === "judged" && r.grade === g).length])), judged: count("judged"), chatFailures: count("chat_failed"), judgeFailures: count("judge_failed"), noJudge: count("no_judge") };
+summary.groupTotal = summary.judged + summary.chatFailures + summary.judgeFailures + summary.noJudge;
+if (summary.groupTotal !== ITEMS.length || Object.values(summary.grades).reduce((a, b) => a + b, 0) !== summary.judged) throw new Error("summary_partition_invalid");
+const cell = (value) => redact(value ?? "").replace(/\|/g, "/").replace(/[\r\n]+/g, " ");
+const model = redact(process.env.CHAT_MODEL || "미지정");
+const timestamp = new Date().toISOString();
 const md = [
-  `# ${CHAR} 20문항 (${new Date().toISOString().slice(0, 16)})`,
-  ``,
-  `대상: ${BASE} · 심판: ${process.env.ANTHROPIC_API_KEY ? JUDGE_MODEL + " (사람이 다시 확인)" : "없음, 사람 채점"}`,
-  process.env.ANTHROPIC_API_KEY ? `\n캐릭터답다 ${count("캐릭터답다")} · 애매 ${count("애매")} · 아니다 ${count("아니다")}\n` : "",
-  `| # | 범주 | 질문 | 기대 | 답 | 판정 | 이유 |`,
-  `|---|---|---|---|---|---|---|`,
-  ...rows.map((r) => `| ${r.n} | ${r.cat} | ${cell(r.q)} | ${cell(r.want)} | ${cell(r.reply)} | ${cell(r.grade)} | ${cell(r.why)} |`),
-].join("\n");
-fs.mkdirSync("eval", { recursive: true });
-const file = `eval/${CHAR}-${process.env.CHAT_MODEL || "model"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.md`;
-fs.writeFileSync(file, md + "\n");
-console.log("\n저장:", file);
+  `# ${CHAR} ${ITEMS.length}문항 (${timestamp})`, "",
+  `대상: ${safeUrl(BASE)} · 심판: ${process.env.ANTHROPIC_API_KEY ? JUDGE_MODEL + " (사람이 다시 확인)" : "없음, 사람 채점"}`,
+  `실행자가 적은 모델(서버에서 확인 안 함): ${model}`,
+  "실제 서버 모델 증거는 서버 실행 명령과 함께 반환 문서에 별도로 기록한다.", "",
+  grades.map((g) => g + " " + summary.grades[g]).join(" · ") + ` · 대사 실패 ${summary.chatFailures} · 심판 실패 ${summary.judgeFailures} · 심판 없음 ${summary.noJudge}`,
+  `네 그룹 합: 정상 판정 ${summary.judged} + 대사 실패 ${summary.chatFailures} + 심판 실패 ${summary.judgeFailures} + 심판 없음 ${summary.noJudge} = ${summary.groupTotal}`, "",
+  "| # | 범주 | 질문 | 기대 | 답 | 판정 | 이유 |", "|---|---|---|---|---|---|---|",
+  ...rows.map((r) => `| ${r.n} | ${cell(r.cat)} | ${cell(r.q)} | ${cell(r.want)} | ${cell(r.reply)} | ${r.status === "chat_failed" ? "대사 실패" : r.status === "judge_failed" ? "심판 실패" : r.status === "no_judge" ? "심판 없음" : r.grade} | ${cell(r.failure || r.why)} |`),
+];
+const slug = (s) => s.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 80) || "model";
+const directory = process.env.EVAL_OUTPUT_DIR || "eval";
+fs.mkdirSync(directory, { recursive: true });
+const base = path.join(directory, `${slug(CHAR)}-${slug(model)}-${timestamp.replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`);
+fs.writeFileSync(base + ".md", md.join("\n") + "\n");
+fs.writeFileSync(base + ".json", JSON.stringify(redactTree({ timestamp, character: CHAR, target: safeUrl(BASE), declaredModel: model, serverModelVerified: false, judgeModel: process.env.ANTHROPIC_API_KEY ? JUDGE_MODEL : null, summary, rows }), null, 2) + "\n");
+console.log("\n저장:", base + ".md", base + ".json");
